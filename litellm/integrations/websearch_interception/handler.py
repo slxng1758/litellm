@@ -688,11 +688,27 @@ class WebSearchInterceptionLogger(CustomLogger):
         tool_calls: List[Dict],
         structured_results: List[Optional[SearchResponse]],
     ) -> List[Dict[str, Any]]:
-        """Build one ``web_search_tool_result`` block per tool_call."""
+        """Build a ``server_tool_use`` + ``web_search_tool_result`` pair per tool_call.
+
+        The original client-side ``tool_use`` (with its ``toolu_`` id) is only
+        ever sent back to the model internally and never reaches the client,
+        so it can't be reused here. A fresh ``srvtoolu_`` id is minted per
+        call and paired with a ``server_tool_use`` block so the result the
+        client sees is self-contained and matches Anthropic's
+        ``^srvtoolu_`` schema for ``web_search_tool_result.tool_use_id``.
+        """
         blocks: List[Dict[str, Any]] = []
         for i, tool_call in enumerate(tool_calls):
-            tool_use_id = tool_call.get("id") or ""
+            tool_use_id = f"srvtoolu_{uuid.uuid4().hex}"
             structured = structured_results[i] if i < len(structured_results) else None
+            blocks.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_use_id,
+                    "name": "web_search",
+                    "input": tool_call.get("input") or {},
+                }
+            )
             blocks.append(
                 WebSearchTransformation.build_web_search_tool_result_block(
                     tool_use_id=tool_use_id,
