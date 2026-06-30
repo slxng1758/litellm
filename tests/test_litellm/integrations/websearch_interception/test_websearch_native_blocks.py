@@ -152,6 +152,31 @@ class TestBuildWebSearchToolResultBlock:
         assert block["content"] == []
 
 
+class TestBuildNativeResultBlocks:
+    """Regression for #31569: must not reuse the client toolu_ id."""
+
+    def test_does_not_reuse_client_tool_use_id(self):
+        tool_calls = [
+            {
+                "id": "toolu_01ABC",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+            }
+        ]
+        blocks = WebSearchInterceptionLogger._build_native_result_blocks(
+            tool_calls=tool_calls,
+            structured_results=[_make_search_response()],
+        )
+        assert len(blocks) == 2
+        server_use, tool_result = blocks
+        assert server_use["type"] == "server_tool_use"
+        assert server_use["id"].startswith("srvtoolu_")
+        assert server_use["id"] != "toolu_01ABC"
+        assert tool_result["type"] == "web_search_tool_result"
+        assert tool_result["tool_use_id"] == server_use["id"]
+
+
 class TestPreRequestHookFlagsNativeTools:
     """The pre-request hook must mark the request when a native tool is used."""
 
@@ -224,10 +249,16 @@ class TestBuildPlanAttachesBlocks:
 
         blocks = plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY)
         assert isinstance(blocks, list)
-        assert len(blocks) == 1
-        assert blocks[0]["type"] == "web_search_tool_result"
-        assert blocks[0]["tool_use_id"] == "toolu_one"
-        assert blocks[0]["content"][0]["url"] == "https://docs.litellm.ai/"
+        assert len(blocks) == 2
+        server_use, tool_result = blocks
+        assert server_use["type"] == "server_tool_use"
+        # Regression for #31569: emit a server-side tool ID instead of reusing
+        # the client toolu_ ID.
+        assert server_use["id"].startswith("srvtoolu_")
+        assert server_use["id"] != "toolu_one"
+        assert tool_result["type"] == "web_search_tool_result"
+        assert tool_result["tool_use_id"] == server_use["id"]
+        assert tool_result["content"][0]["url"] == "https://docs.litellm.ai/"
 
     @pytest.mark.asyncio
     async def test_metadata_does_not_carry_blocks_when_flag_absent(self):
@@ -479,6 +510,10 @@ class TestLegacyPathMatchesNewPath:
                 kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
             )
 
-        assert out["content"][0]["type"] == "web_search_tool_result"
-        assert out["content"][0]["tool_use_id"] == "toolu_legacy"
-        assert out["content"][1]["type"] == "text"
+        server_use, tool_result, text_block = out["content"]
+        assert server_use["type"] == "server_tool_use"
+        assert server_use["id"].startswith("srvtoolu_")
+        assert server_use["id"] != "toolu_legacy"
+        assert tool_result["type"] == "web_search_tool_result"
+        assert tool_result["tool_use_id"] == server_use["id"]
+        assert text_block["type"] == "text"
